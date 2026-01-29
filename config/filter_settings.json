@@ -1,0 +1,7 @@
+{
+  "cooldown_minutes": 5,
+  "max_message_length": 10,
+  "filter_no_username": true,
+  "filter_no_avatar": true,
+  "min_account_age_days": 0
+}

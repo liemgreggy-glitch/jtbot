@@ -1,0 +1,14 @@
+{
+  "enabled": true,
+  "delay_min": 10,
+  "delay_max": 15,
+  "batch_size": 5,
+  "batch_rest_min": 180,
+  "batch_rest_max": 480,
+  "daily_limit": 50,
+  "active_hours_start": 0,
+  "active_hours_end": 23,
+  "send_sticker_first": true,
+  "sticker_delay_min": 1.0,
+  "sticker_delay_max": 3.0
+}

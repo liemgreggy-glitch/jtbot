@@ -1,0 +1,23 @@
+{
+  "accounts": [
+    {
+      "phone": "+66986353492",
+      "session_file": "session_66986353492",
+      "name": "老登",
+      "username": "Jennifer8787",
+      "user_id": 5394663014,
+      "enabled": true,
+      "added_at": "2026-01-10T05:35:56.528784"
+    },
+    {
+      "phone": "+66980651200",
+      "session_file": "session_66980651200",
+      "name": "大头",
+      "username": "datou01010",
+      "user_id": 5385108612,
+      "enabled": true,
+      "added_at": "2026-01-10T05:37:29.043815"
+    }
+  ],
+  "max_accounts": 10
+}
