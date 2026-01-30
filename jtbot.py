@@ -23,6 +23,7 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKe
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.fsm.storage.memory import MemoryStorage
 from cachetools import TTLCache
 from dotenv import load_dotenv
@@ -1986,7 +1987,7 @@ class JTBot:
         self.dm_template_manager = DMTemplateManager(Config.DM_TEMPLATES_FILE)
         self.dm_record_manager = DMRecordManager(Config.DM_RECORDS_FILE, Config.DM_SENT_USERS_FILE)
         self.dm_settings_manager = DMSettingsManager(Config.DM_SETTINGS_FILE)
-        self.dm_sticker_manager = DMStickerManager()  # 贴纸管理器
+        self.dm_sticker_manager = DMStickerManager()
         
         # 确保目录存在
         os.makedirs(Config.CONFIG_DIR, exist_ok=True)
@@ -1994,18 +1995,30 @@ class JTBot:
         os.makedirs(Config.EXPORTS_DIR, exist_ok=True)
         
         # DM 客户端
-        self.dm_clients: Dict[str, TelegramClient] = {}  # phone -> client
+        self.dm_clients: Dict[str, TelegramClient] = {}
         
-        # Bot (管理界面)
-        self.bot = Bot(token=Config.BOT_TOKEN)
-        self.dp = Dispatcher(storage=MemoryStorage())
-        
-        # 代理配置
+        # 代理配置 (必须在 Bot 初始化之前)
         self.proxy = ProxyParser.load_proxy_from_file(Config.PROXY_FILE)
         
+        # Bot (管理界面) - 使用代理
+        from aiogram.client.session.aiohttp import AiohttpSession
+        
+        bot_session = None
+        if self.proxy:
+            proxy_addr = self.proxy['addr']
+            proxy_port = self.proxy['port']
+            proxy_url = f"socks5://{proxy_addr}:{proxy_port}"
+            if self.proxy.get('username'):
+                proxy_url = f"socks5://{self.proxy['username']}:{self.proxy['password']}@{proxy_addr}:{proxy_port}"
+            bot_session = AiohttpSession(proxy=proxy_url)
+            logger.info(f"Bot 使用代理: {proxy_addr}:{proxy_port}")
+        
+        self.bot = Bot(token=Config.BOT_TOKEN, session=bot_session)
+        self.dp = Dispatcher(storage=MemoryStorage())
+        
         # 多账号客户端
-        self.clients: Dict[str, TelegramClient] = {}  # phone -> client
-        self.client_tasks: Dict[str, asyncio.Task] = {}  # phone -> task
+        self.clients: Dict[str, TelegramClient] = {}
+        self.client_tasks: Dict[str, asyncio.Task] = {}
         
         # 防重复转发缓存: {user_id}_{keyword} -> last_trigger_time
         cooldown_seconds = self.filter_manager.get_setting('cooldown_minutes') * 60
@@ -3824,7 +3837,7 @@ class JTBot:
                 return
             
             # 分页设置
-            per_page = 20  # 减少每页数量，因为每行信息更长了
+            per_page = 20
             total_pages = (len(accounts) + per_page - 1) // per_page
             page = max(1, min(page, total_pages))
             
@@ -3832,8 +3845,8 @@ class JTBot:
             end_idx = min(start_idx + per_page, len(accounts))
             page_accounts = accounts[start_idx:end_idx]
             
-            # 今日日期
-            today = datetime.now().date().isoformat()
+            # 获取所有私信记录用于统计
+            all_records = self.dm_record_manager.records
             
             # 状态文本映射
             status_text_map = {
@@ -3854,12 +3867,9 @@ class JTBot:
                 username = acc.get('username', '')
                 status = acc.get('status', 'unknown')
                 
-                # 获取今日发送数量
-                last_sent_date = acc.get('last_sent_date', '')
-                if last_sent_date == today:
-                    daily_sent = acc.get('daily_sent', 0)
-                else:
-                    daily_sent = 0
+                # 统计该账号的成功发送数量
+                success_count = sum(1 for r in all_records 
+                                   if r.get('dm_account') == phone and r.get('status') == 'success')
                 
                 # 状态emoji和文字
                 status_emoji = self.dm_account_manager.get_status_emoji(status)
@@ -3868,18 +3878,17 @@ class JTBot:
                 # 用户名部分（无用户名则不显示）
                 username_part = f"@{username}" if username else ""
                 
-                # 格式: 序号. 状态emoji 手机号 | @用户名 | 状态文字 | 今日:N条
+                # 格式: 序号. 状态emoji 手机号 | @用户名 | 状态文字 | 已发:N条
                 if username_part:
-                    text += f"{i}. {status_emoji} {phone} | {username_part} | {status_name} | 今日:{daily_sent}条\n"
+                    text += f"{i}. {status_emoji} {phone} | {username_part} | {status_name} | 已发:{success_count}条\n"
                 else:
-                    text += f"{i}. {status_emoji} {phone} | {status_name} | 今日:{daily_sent}条\n"
+                    text += f"{i}. {status_emoji} {phone} | {status_name} | 已发:{success_count}条\n"
             
             await callback.message.edit_text(
                 text,
                 reply_markup=Keyboards.dm_accounts_list_buttons(page, total_pages)
             )
             await callback.answer()
-        
         @self.dp.callback_query(F.data == "dm_check_all_status")
         async def dm_check_all_status(callback: CallbackQuery):
             if callback.from_user.id != Config.ADMIN_USER_ID:
