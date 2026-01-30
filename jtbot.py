@@ -1511,6 +1511,8 @@ class BotStates(StatesGroup):
     waiting_for_cooldown = State()
     waiting_for_max_length = State()
     waiting_for_min_age = State()
+    # 黑名单移除
+    waiting_remove_blacklist_user = State()
 
 
 class ExportStates(StatesGroup):
@@ -1751,18 +1753,30 @@ class Keyboards:
         return InlineKeyboardMarkup(inline_keyboard=keyboard)
     
     @staticmethod
-    def blacklist_users_list(users: List[Dict]) -> InlineKeyboardMarkup:
-        """黑名单用户列表"""
+    def blacklist_users_list(page: int = 1, total_pages: int = 1) -> InlineKeyboardMarkup:
+        """黑名单用户列表 - 分页导航"""
         keyboard = []
-        for user in users[:20]:  # 最多显示20个
-            username = user.get('username', '无')
-            display = f"❌ @{username}" if username and username != '无' else f"❌ ID:{user['user_id']}"
-            keyboard.append([
-                InlineKeyboardButton(text=display[:30], callback_data=f"unblock_user_{user['user_id']}")
-            ])
+        
+        # 分页导航按钮
+        if total_pages > 1:
+            nav_buttons = []
+            if page > 1:
+                nav_buttons.append(InlineKeyboardButton(text="⬅️ 上一页", callback_data=f"bl_users_page_{page-1}"))
+            nav_buttons.append(InlineKeyboardButton(text=f"{page}/{total_pages}", callback_data="bl_users_page_info"))
+            if page < total_pages:
+                nav_buttons.append(InlineKeyboardButton(text="➡️ 下一页", callback_data=f"bl_users_page_{page+1}"))
+            keyboard.append(nav_buttons)
+        
+        # 移除用户按钮
+        keyboard.append([
+            InlineKeyboardButton(text="🗑️ 移除用户", callback_data="bl_remove_user_start")
+        ])
+        
+        # 返回按钮
         keyboard.append([
             InlineKeyboardButton(text="🔙 返回", callback_data="menu_blacklist")
         ])
+        
         return InlineKeyboardMarkup(inline_keyboard=keyboard)
     
     @staticmethod
@@ -2960,10 +2974,14 @@ class JTBot:
             await callback.answer()
         
         @self.dp.callback_query(F.data == "blacklist_users")
-        async def blacklist_users(callback: CallbackQuery):
+        async def blacklist_users(callback: CallbackQuery, state: FSMContext):
+            """显示黑名单用户列表 - 第1页"""
             if callback.from_user.id != Config.ADMIN_USER_ID:
                 await callback.answer("⛔ 无权限访问")
                 return
+            
+            # 清除状态（如果从移除流程返回）
+            await state.clear()
             
             users = self.blacklist_manager.get_users()
             if not users:
@@ -2974,13 +2992,143 @@ class JTBot:
                     ]])
                 )
             else:
-                text = f"👥 已屏蔽用户 ({len(users)}):\n\n"
-                text += "点击用户移除黑名单："
-                await callback.message.edit_text(
-                    text,
-                    reply_markup=Keyboards.blacklist_users_list(users)
-                )
+                await show_blacklist_users_page(callback, page=1)
             await callback.answer()
+        
+        async def show_blacklist_users_page(callback: CallbackQuery, page: int = 1):
+            """显示黑名单用户列表的指定页"""
+            users = self.blacklist_manager.get_users()
+            total_users = len(users)
+            per_page = 20
+            total_pages = (total_users + per_page - 1) // per_page  # 向上取整
+            
+            # 确保页码有效
+            page = max(1, min(page, total_pages))
+            
+            # 计算当前页的用户范围
+            start_idx = (page - 1) * per_page
+            end_idx = min(start_idx + per_page, total_users)
+            page_users = users[start_idx:end_idx]
+            
+            # 构建消息文本
+            text = f"👥 用户黑名单 (第{page}/{total_pages}页，共{total_users}个)\n\n"
+            text += "点击ID可复制\n\n"
+            
+            for user in page_users:
+                user_id = user['user_id']
+                username = user.get('username', '')
+                if username and username != '无':
+                    text += f"`{user_id}` @{username}\n"
+                else:
+                    text += f"`{user_id}`\n"
+            
+            # 显示消息
+            await callback.message.edit_text(
+                text,
+                reply_markup=Keyboards.blacklist_users_list(page, total_pages),
+                parse_mode="Markdown"
+            )
+        
+        @self.dp.callback_query(F.data.startswith("bl_users_page_"))
+        async def blacklist_users_page(callback: CallbackQuery):
+            """处理黑名单用户列表分页"""
+            if callback.from_user.id != Config.ADMIN_USER_ID:
+                await callback.answer("⛔ 无权限访问")
+                return
+            
+            # 提取页码
+            if callback.data == "bl_users_page_info":
+                await callback.answer()
+                return
+            
+            try:
+                page = int(callback.data.replace("bl_users_page_", ""))
+                await show_blacklist_users_page(callback, page)
+                await callback.answer()
+            except (ValueError, IndexError):
+                await callback.answer("❌ 页码错误")
+        
+        @self.dp.callback_query(F.data == "bl_remove_user_start")
+        async def bl_remove_user_start(callback: CallbackQuery, state: FSMContext):
+            """开始移除黑名单用户流程"""
+            if callback.from_user.id != Config.ADMIN_USER_ID:
+                await callback.answer("⛔ 无权限访问")
+                return
+            
+            users = self.blacklist_manager.get_users()
+            total_users = len(users)
+            
+            text = "🗑️ 移除黑名单用户\n\n"
+            text += "请发送要移除的用户ID\n"
+            text += "支持多个ID，用空格或换行分隔\n\n"
+            text += "示例: 7804079885 8533238613"
+            
+            await callback.message.edit_text(
+                text,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="🔙 取消", callback_data="blacklist_users")
+                ]])
+            )
+            
+            # 设置状态并保存当前用户数
+            await state.set_state(BotStates.waiting_remove_blacklist_user)
+            await state.update_data(total_users_before=total_users)
+            await callback.answer()
+        
+        @self.dp.message(BotStates.waiting_remove_blacklist_user)
+        async def process_remove_blacklist_user(message: Message, state: FSMContext):
+            """处理移除黑名单用户的消息"""
+            if message.from_user.id != Config.ADMIN_USER_ID:
+                return
+            
+            # 解析用户输入的ID列表（支持空格和换行分隔）
+            text = message.text.strip()
+            user_ids_str = re.split(r'[\s,]+', text)
+            
+            removed_ids = []
+            not_found_ids = []
+            
+            for user_id_str in user_ids_str:
+                user_id_str = user_id_str.strip()
+                if not user_id_str:
+                    continue
+                
+                try:
+                    user_id = int(user_id_str)
+                    if self.blacklist_manager.remove_user(user_id):
+                        removed_ids.append(user_id)
+                    else:
+                        not_found_ids.append(user_id)
+                except ValueError:
+                    not_found_ids.append(user_id_str)
+            
+            # 构建结果消息
+            users = self.blacklist_manager.get_users()
+            total_users = len(users)
+            
+            result_text = ""
+            if removed_ids:
+                result_text += f"✅ 已移除 {len(removed_ids)} 个用户:\n"
+                result_text += ", ".join(str(uid) for uid in removed_ids)
+                result_text += "\n\n"
+            
+            if not_found_ids:
+                result_text += f"❌ 未找到 {len(not_found_ids)} 个用户:\n"
+                result_text += ", ".join(str(uid) for uid in not_found_ids)
+                result_text += "\n\n"
+            
+            if not removed_ids and not not_found_ids:
+                result_text = "❌ 未识别到有效的用户ID\n\n"
+            
+            result_text += "继续发送ID移除，或点击返回"
+            
+            await message.answer(
+                result_text,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text=f"🔙 返回黑名单 ({total_users}人)", callback_data="blacklist_users")
+                ]])
+            )
+            # 保持状态，允许继续移除
         
         @self.dp.callback_query(F.data == "blacklist_chats")
         async def blacklist_chats(callback: CallbackQuery):
@@ -3026,7 +3174,8 @@ class JTBot:
             await menu_blacklist(callback)
         
         @self.dp.callback_query(F.data.startswith("unblock_user_"))
-        async def unblock_user(callback: CallbackQuery):
+        async def unblock_user(callback: CallbackQuery, state: FSMContext):
+            """旧版移除用户回调 - 保留兼容性"""
             if callback.from_user.id != Config.ADMIN_USER_ID:
                 await callback.answer("⛔ 无权限访问")
                 return
@@ -3035,7 +3184,7 @@ class JTBot:
                 user_id = int(callback.data.replace("unblock_user_", ""))
                 if self.blacklist_manager.remove_user(user_id):
                     await callback.answer("✅ 已移除用户")
-                    await blacklist_users(callback)
+                    await blacklist_users(callback, state)
                 else:
                     await callback.answer("❌ 移除失败")
             except ValueError:
