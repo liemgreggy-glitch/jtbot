@@ -2236,7 +2236,12 @@ class JTBot:
                 return
             
             await callback.message.edit_text(
-                "请输入监控账号的手机号\n\n格式: +8613800138000",
+                "请输入监控账号的手机号\n\n"
+                "支持格式:\n"
+                "• +8613800138000\n"
+                "• 8613800138000\n"
+                "• +5574988282001\n"
+                "• 5574988282001",
                 reply_markup=Keyboards.back_to_accounts()
             )
             await state.set_state(BotStates.waiting_for_phone)
@@ -2247,14 +2252,31 @@ class JTBot:
             if message.from_user.id != Config.ADMIN_USER_ID:
                 return
             
-            phone = message.text.strip()
+            phone_input = message.text.strip()
             
-            if not re.match(r'^\+\d{10,15}$', phone):
+            # 规范化手机号格式（支持带或不带+号）
+            # 移除所有空格和特殊字符，只保留数字和+
+            phone_clean = re.sub(r'[^\d+]', '', phone_input)
+            
+            # 如果没有+号，自动添加
+            if not phone_clean.startswith('+'):
+                phone_clean = '+' + phone_clean
+            
+            # 验证格式：必须是 + 号开头，后跟 10-15 位数字
+            if not re.match(r'^\+\d{10,15}$', phone_clean):
                 await message.answer(
-                    "❌ 手机号格式不正确\n\n请使用国际格式，例如: +8613800138000",
+                    "❌ 手机号格式不正确\n\n"
+                    "支持格式:\n"
+                    "• +8613800138000\n"
+                    "• 8613800138000\n"
+                    "• +5574988282001\n"
+                    "• 5574988282001",
                     reply_markup=Keyboards.back_to_accounts()
                 )
                 return
+            
+            # 使用规范化后的手机号
+            phone = phone_clean
             
             if self.account_manager.get_account(phone):
                 await message.answer(
