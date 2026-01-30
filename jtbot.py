@@ -2999,6 +2999,17 @@ class JTBot:
             """显示黑名单用户列表的指定页"""
             users = self.blacklist_manager.get_users()
             total_users = len(users)
+            
+            # 处理空列表情况
+            if total_users == 0:
+                await callback.message.edit_text(
+                    "✅ 用户黑名单为空",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                        InlineKeyboardButton(text="🔙 返回", callback_data="menu_blacklist")
+                    ]])
+                )
+                return
+            
             per_page = 20
             total_pages = (total_users + per_page - 1) // per_page  # 向上取整
             
@@ -3060,7 +3071,7 @@ class JTBot:
             
             text = "🗑️ 移除黑名单用户\n\n"
             text += "请发送要移除的用户ID\n"
-            text += "支持多个ID，用空格或换行分隔\n\n"
+            text += "支持多个ID，用空格、逗号或换行分隔\n\n"
             text += "示例: 7804079885 8533238613"
             
             await callback.message.edit_text(
@@ -3070,9 +3081,8 @@ class JTBot:
                 ]])
             )
             
-            # 设置状态并保存当前用户数
+            # 设置状态
             await state.set_state(BotStates.waiting_remove_blacklist_user)
-            await state.update_data(total_users_before=total_users)
             await callback.answer()
         
         @self.dp.message(BotStates.waiting_remove_blacklist_user)
@@ -3081,12 +3091,23 @@ class JTBot:
             if message.from_user.id != Config.ADMIN_USER_ID:
                 return
             
-            # 解析用户输入的ID列表（支持空格和换行分隔）
+            # 检查消息类型
+            if not message.text:
+                await message.answer(
+                    "❌ 请发送文本消息（用户ID）",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                        InlineKeyboardButton(text="🔙 返回黑名单", callback_data="blacklist_users")
+                    ]])
+                )
+                return
+            
+            # 解析用户输入的ID列表（支持空格、换行和逗号分隔）
             text = message.text.strip()
             user_ids_str = re.split(r'[\s,]+', text)
             
             removed_ids = []
             not_found_ids = []
+            invalid_ids = []
             
             for user_id_str in user_ids_str:
                 user_id_str = user_id_str.strip()
@@ -3100,7 +3121,7 @@ class JTBot:
                     else:
                         not_found_ids.append(user_id)
                 except ValueError:
-                    not_found_ids.append(user_id_str)
+                    invalid_ids.append(user_id_str)
             
             # 构建结果消息
             users = self.blacklist_manager.get_users()
@@ -3113,11 +3134,16 @@ class JTBot:
                 result_text += "\n\n"
             
             if not_found_ids:
-                result_text += f"❌ 未找到 {len(not_found_ids)} 个用户:\n"
+                result_text += f"⚠️ 未在黑名单中找到 {len(not_found_ids)} 个ID:\n"
                 result_text += ", ".join(str(uid) for uid in not_found_ids)
                 result_text += "\n\n"
             
-            if not removed_ids and not not_found_ids:
+            if invalid_ids:
+                result_text += f"❌ 无效的ID格式 ({len(invalid_ids)}个):\n"
+                result_text += ", ".join(invalid_ids)
+                result_text += "\n\n"
+            
+            if not removed_ids and not not_found_ids and not invalid_ids:
                 result_text = "❌ 未识别到有效的用户ID\n\n"
             
             result_text += "继续发送ID移除，或点击返回"
